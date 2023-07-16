@@ -9,7 +9,7 @@ import Foundation
 import CloudKit
 
 struct Memo: Identifiable {
-    let id: UUID
+    let id: CKRecord.ID
     let createdAt: Date
     let text: String
 }
@@ -35,8 +35,24 @@ final class ListViewModel: ObservableObject {
 
 final class CloudManager: ObservableObject {
     
-    private var container = CKContainer(identifier: "iCloud.macOSTest")
-    @Published var memo: [Memo] = []
+    private var container = CKContainer(identifier: "iCloud.macOSTest").privateCloudDatabase
+    var memo: [Memo] = []
+    
+    func printMemo() {
+        print("@Log - \(memo)")
+    }
+    
+    func createMemo(text: String) {
+        let record = CKRecord(recordType: "Memo")
+        record.setValue(text, forKey: "text")
+        record.setValue(Date(), forKey: "createdAt")
+        container.save(record) { record, error in
+            if let error = error {
+                print(error.localizedDescription)
+            }
+            print("@Log - Save 완료!")
+        }
+    }
 
 //    async throws -> [Memo]
     func fetchMemo(_ completion: @escaping ([Memo]) -> ()) {
@@ -45,12 +61,14 @@ final class CloudManager: ObservableObject {
         let query = CKQuery(recordType: "Memo", predicate: predicate)
         query.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
         let operation = CKQueryOperation(query: query)
-        operation.database = container.privateCloudDatabase
+        operation.database = container
         
         operation.queryResultBlock = { result in
             switch result {
             case .success(_):
-                completion(memo)
+                DispatchQueue.main.async {
+                    completion(memo)
+                }
             case .failure(let error):
                 print("@Log - \(error.localizedDescription)")
             }
@@ -60,15 +78,12 @@ final class CloudManager: ObservableObject {
             switch result {
             case .success(let record):
                 guard let text = record["text"] as? String,
-                      let createdAt = record["createdAt"] as? Date
-                else { return }
-                print("@Log - \(text), \(createdAt)")
-                memo.append(Memo(id: UUID(), createdAt: createdAt, text: text))
+                      let createdAt = record["createdAt"] as? Date else { return }
+                memo.append(Memo(id: record.recordID, createdAt: createdAt, text: text))
                 
             case .failure(let error):
                 print("@Log error - \(error.localizedDescription)")
             }
-//            completion(memo)
         }
         operation.start()
     }
@@ -76,6 +91,41 @@ final class CloudManager: ObservableObject {
     func temp() {
         fetchMemo { memo in
             self.memo = memo
+            print("@Log setting - \(memo)")
+        }
+    }
+    
+    func updateMemo(memo: Memo, updateText: String) {
+        let recordID = memo.id
+        container.fetch(withRecordID: recordID) { record, error in
+            guard let record = record else {
+                if let error = error {
+                    print("@Log - \(error.localizedDescription)")
+                }
+                return
+            }
+            guard let text = record["text"],
+                  let createdAt = record["createdAt"] else {
+                print("@Log update return")
+                return }
+            print("@Log update - \(text), \(createdAt)")
+            record["text"] = updateText
+            record["createdAt"] = Date()
+
+            self.container.save(record) { record, error in
+                if let error = error {
+                    print("@Log - \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    func deleteMemo(memo: Memo) {
+        let recordID = memo.id
+        container.delete(withRecordID: recordID) { recordID, error in
+            if let error = error {
+                print("@Log - \(error.localizedDescription)")
+            }
         }
     }
     
